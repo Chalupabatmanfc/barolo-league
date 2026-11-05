@@ -3,7 +3,6 @@ import csv, io, json, os, re, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
-
 LEAGUE='9w76f1ygmqodmp3i'
 ROOT=Path(__file__).parent
 CACHE=ROOT/'data.json'
@@ -12,6 +11,7 @@ INTERVAL=max(300,int(os.getenv('SYNC_INTERVAL_SECONDS','1800')))
 lock=threading.Lock()
 state={'source':'none','updated_at':None,'standings':None,'matchups':{},'error':None}
 transfers={'source':'pending','updated_at':None,'rows':[],'error':None}
+transfer_diagnostic={'checked_at':None,'http_status':None,'content_type':None,'response_type':None,'top_level_keys':[],'response_count':None,'data_keys':[],'table_keys':[],'rows_path':None,'row_count':None,'error':None}
 
 def fetch(endpoint,period=None):
     url=f'https://www.fantrax.com/fxea/general/{endpoint}?leagueId={LEAGUE}'
@@ -47,7 +47,6 @@ def sync():
     try:
         standings=fetch('getStandings')
         if not isinstance(standings,list) or len(standings)<2:raise ValueError('Standings response was not a team list')
-        # The standings W-D-L field reveals the latest completed scoring period.
         completed=max((sum(int(v) for v in re.findall(r'\d+',str(team.get('points','')))) for team in standings),default=0)
         if completed<1:raise ValueError('Could not identify completed gameweeks')
         matchups={}
@@ -73,31 +72,58 @@ def sync():
         state=result
         CACHE.write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
 
+def locate_rows(node,depth=0,path='$'):
+    """Look for transaction rows in common API wrappers, without exposing payload contents."""
+    if depth>6:return None,None
+    if isinstance(node,list):
+        if path.endswith(('.rows','.transactions','.items')):return node,path
+        for i,item in enumerate(node[:3]):
+            rows,found=locate_rows(item,depth+1,f'{path}[{i}]')
+            if rows is not None:return rows,found
+    if isinstance(node,dict):
+        for key in ('rows','transactions','items'):
+            if isinstance(node.get(key),list):return node[key],f'{path}.{key}'
+        for key in ('responses','data','table','result','transactionHistory','history','content'):
+            if key in node:
+                rows,found=locate_rows(node[key],depth+1,f'{path}.{key}')
+                if rows is not None:return rows,found
+    return None,None
+
 def sync_transfers():
-    """Fetch Fantrax website transaction history; keep separate from standings sync."""
     url=f'https://www.fantrax.com/fxpa/req?leagueId={LEAGUE}'
     payload={'msgs':[{'method':'getTransactionDetailsHistory','data':{'leagueId':LEAGUE,'maxResultsPerPage':'100','executedOnly':True}}]}
     req=urllib.request.Request(url,data=json.dumps(payload).encode('utf-8'),headers={
         'User-Agent':'Mozilla/5.0 (compatible; BaroloLeagueDashboard/2.0)',
         'Accept':'application/json','Content-Type':'application/json','Origin':'https://www.fantrax.com',
         'Referer':f'https://www.fantrax.com/fantasy/league/{LEAGUE}/transactions'})
+    diagnostic={'checked_at':int(time.time()),'http_status':None,'content_type':None,'response_type':None,'top_level_keys':[],'response_count':None,'data_keys':[],'table_keys':[],'rows_path':None,'row_count':None,'error':None}
     try:
         with urllib.request.urlopen(req,timeout=18) as response:
+            diagnostic['http_status']=response.status
+            diagnostic['content_type']=response.headers.get('Content-Type','').split(';')[0]
             body=json.load(response)
-        # Fantrax's website API wraps the result in responses[0].data.
-        result=body
-        if isinstance(body,dict) and isinstance(body.get('responses'),list) and body['responses']:
-            result=body['responses'][0].get('data',body['responses'][0])
-        if isinstance(result,dict) and isinstance(result.get('table'),dict):
-            rows=result['table'].get('rows')
-        elif isinstance(result,dict):
-            rows=result.get('rows') or result.get('transactions')
-        else:rows=result if isinstance(result,list) else None
-        if not isinstance(rows,list):
-            raise ValueError('Unexpected transaction response format (no rows array)')
+        diagnostic['response_type']=type(body).__name__
+        if isinstance(body,dict):
+            diagnostic['top_level_keys']=list(body.keys())[:25]
+            responses=body.get('responses')
+            if isinstance(responses,list):
+                diagnostic['response_count']=len(responses)
+                if responses and isinstance(responses[0],dict):
+                    data=responses[0].get('data')
+                    if isinstance(data,dict):
+                        diagnostic['data_keys']=list(data.keys())[:25]
+                        if isinstance(data.get('table'),dict):diagnostic['table_keys']=list(data['table'].keys())[:25]
+        rows,path=locate_rows(body)
+        if rows is None:raise ValueError('No recognised transaction rows; inspect /api/transfers/diagnostic')
+        diagnostic['rows_path']=path
+        diagnostic['row_count']=len(rows)
         with lock:transfers.update(source='fantrax',updated_at=int(time.time()),rows=rows[:100],error=None)
     except Exception as exc:
-        with lock:transfers['error']=f'{type(exc).__name__}: {exc}'
+        diagnostic['error']=f'{type(exc).__name__}: {exc}'
+        with lock:transfers['error']=diagnostic['error']
+    finally:
+        with lock:transfer_diagnostic.update(diagnostic)
+        print('Transfer sync diagnostic: '+json.dumps(diagnostic,ensure_ascii=False),flush=True)
 
 def transfer_worker():
     while True:
@@ -117,8 +143,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path=='/api/transfers':
             with lock:data=dict(transfers)
             body=json.dumps(data,ensure_ascii=False).encode();mime='application/json; charset=utf-8'
+        elif path=='/api/transfers/diagnostic':
+            # Only structural metadata, never cookies, authentication headers, or player details.
+            with lock:data=dict(transfer_diagnostic)
+            body=json.dumps(data,ensure_ascii=False).encode();mime='application/json; charset=utf-8'
         elif path in ('/api/data','/api/status'):
-            with lock: data=dict(state)
+            with lock:data=dict(state)
             if path=='/api/status':data={k:data.get(k) for k in ('source','updated_at','error')}
             body=json.dumps(data,ensure_ascii=False).encode();mime='application/json; charset=utf-8'
         else:
