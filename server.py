@@ -11,6 +11,7 @@ CSV=ROOT/'fallback.csv'
 INTERVAL=max(300,int(os.getenv('SYNC_INTERVAL_SECONDS','1800')))
 lock=threading.Lock()
 state={'source':'none','updated_at':None,'standings':None,'matchups':{},'error':None}
+transfers={'source':'pending','updated_at':None,'rows':[],'error':None}
 
 def fetch(endpoint,period=None):
     url=f'https://www.fantrax.com/fxea/general/{endpoint}?leagueId={LEAGUE}'
@@ -72,6 +73,37 @@ def sync():
         state=result
         CACHE.write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
 
+def sync_transfers():
+    """Fetch Fantrax website transaction history; keep separate from standings sync."""
+    url=f'https://www.fantrax.com/fxpa/req?leagueId={LEAGUE}'
+    payload={'msgs':[{'method':'getTransactionDetailsHistory','data':{'leagueId':LEAGUE,'maxResultsPerPage':'100','executedOnly':True}}]}
+    req=urllib.request.Request(url,data=json.dumps(payload).encode('utf-8'),headers={
+        'User-Agent':'Mozilla/5.0 (compatible; BaroloLeagueDashboard/2.0)',
+        'Accept':'application/json','Content-Type':'application/json','Origin':'https://www.fantrax.com',
+        'Referer':f'https://www.fantrax.com/fantasy/league/{LEAGUE}/transactions'})
+    try:
+        with urllib.request.urlopen(req,timeout=18) as response:
+            body=json.load(response)
+        # Fantrax's website API wraps the result in responses[0].data.
+        result=body
+        if isinstance(body,dict) and isinstance(body.get('responses'),list) and body['responses']:
+            result=body['responses'][0].get('data',body['responses'][0])
+        if isinstance(result,dict) and isinstance(result.get('table'),dict):
+            rows=result['table'].get('rows')
+        elif isinstance(result,dict):
+            rows=result.get('rows') or result.get('transactions')
+        else:rows=result if isinstance(result,list) else None
+        if not isinstance(rows,list):
+            raise ValueError('Unexpected transaction response format (no rows array)')
+        with lock:transfers.update(source='fantrax',updated_at=int(time.time()),rows=rows[:100],error=None)
+    except Exception as exc:
+        with lock:transfers['error']=f'{type(exc).__name__}: {exc}'
+
+def transfer_worker():
+    while True:
+        sync_transfers()
+        time.sleep(INTERVAL)
+
 def worker():
     while True:
         sync()
@@ -82,6 +114,9 @@ class Handler(BaseHTTPRequestHandler):
         path=urlparse(self.path).path
         if path=='/' or path=='/index.html':
             body=(ROOT/'index.html').read_bytes();mime='text/html; charset=utf-8'
+        elif path=='/api/transfers':
+            with lock:data=dict(transfers)
+            body=json.dumps(data,ensure_ascii=False).encode();mime='application/json; charset=utf-8'
         elif path in ('/api/data','/api/status'):
             with lock: data=dict(state)
             if path=='/api/status':data={k:data.get(k) for k in ('source','updated_at','error')}
@@ -99,6 +134,7 @@ if __name__=='__main__':
         try:state.update(json.loads(CACHE.read_text(encoding='utf-8')))
         except (OSError,ValueError):pass
     threading.Thread(target=worker,daemon=True).start()
+    threading.Thread(target=transfer_worker,daemon=True).start()
     port=int(os.getenv('PORT','8000'))
     print(f'Barolo League listening on http://localhost:{port}',flush=True)
     ThreadingHTTPServer(('0.0.0.0',port),Handler).serve_forever()
