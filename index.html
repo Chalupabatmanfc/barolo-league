@@ -52,34 +52,74 @@ function seasonLeaderboard(rows,throughWeek=Infinity){
  }}return [...map.values()].sort((a,b)=>b.pts-a.pts||b.pf-a.pf||a.name.localeCompare(b.name));
 }
 function seasonStory(season,rows,ranked,weeks,win,loss,big){
- const live=season==='2026-2027',first=ranked[0],second=ranked[1];if(!first)return {title:'Season review',paragraphs:[],verdict:''};
- const wks=weeks.slice().sort((a,b)=>a-b),last=wks.at(-1),early=wks[Math.max(0,Math.floor(wks.length/4)-1)],mid=wks[Math.max(0,Math.floor(wks.length/2)-1)];
- const at=w=>seasonLeaderboard(rows,w),e=at(early),m=at(mid),late=at(wks[Math.max(0,wks.length-4)]);
- const leaders=wks.map(w=>({week:w,top:at(w)[0]?.name}));const changes=leaders.slice(1).filter((x,i)=>x.top!==leaders[i].top).length;
+ const live=season==='2026-2027',first=ranked[0],second=ranked[1],third=ranked[2];
+ if(!first)return {title:'Season review',paragraphs:[],verdict:''};
+ const wks=[...weeks].sort((a,b)=>a-b),last=wks.at(-1),q=wks[Math.max(0,Math.floor(wks.length/4)-1)],half=wks[Math.max(0,Math.floor(wks.length/2)-1)],lateWeek=wks[Math.max(0,wks.length-4)];
+ const at=w=>seasonLeaderboard(rows,w),early=at(q),mid=at(half),late=at(lateWeek);
+ const leaders=wks.map(w=>at(w)[0]?.name).filter(Boolean),changes=leaders.slice(1).filter((t,i)=>t!==leaders[i]).length;
  const prevSeason=String(Number(season.slice(0,4))-1)+'-'+String(Number(season.slice(5))-1);
- const prevRows=history[prevSeason]||[];const prevTop=prevRows.length?seasonLeaderboard(prevRows)[0]?.name:null;
- const repeat=!live&&prevTop===first.name;
- const topWord=live?'leads the current standings':'finished top of the recorded head-to-head table';
- const lead=second?first.pts-second.pts:0;
- const title=repeat?first.name+' makes it two seasons running at the summit':changes>2?first.name+' comes through a season of twists':lead<=3?first.name+' edges a tight title race':first.name+' sets the pace in '+season.replace('-','–');
+ const prevRows=history[prevSeason]||[],prevTop=prevRows.length?seasonLeaderboard(prevRows)[0]?.name:null;
+ const repeat=!live&&prevTop===first.name, gap=second?first.pts-second.pts:0;
+ const lateOvertake=late[0]&&late[0].name!==first.name, earlyLeader=early[0]?.name,halfLeader=mid[0]?.name;
+ const leadingMost=wks.reduce((map,w)=>{let t=at(w)[0]?.name;if(t)map[t]=(map[t]||0)+1;return map},{});
+ const dominant=Object.entries(leadingMost).sort((a,b)=>b[1]-a[1])[0];
+ const surprise=ranked.filter(t=>t.name!==first.name).sort((a,b)=>(b.pf-b.pa)-(a.pf-a.pa))[0];
+ const lastPlace=ranked.at(-1);
+ const seasonText=season.replace('-','–'),fmtN=n=>n===1?'one':String(n);
+ // The headline and narrative structure intentionally vary by season, driven by distinct data.
+ const angle=repeat?'dynasty':lateOvertake?'comeback':changes>=5?'chaos':gap<=3?'photo':gap>=12?'dominance':earlyLeader!==first.name?'pursuit':'steady';
+ const title={
+  dynasty:first.name+' keeps the rest waiting for their turn',
+  comeback:'A late twist as '+first.name+' takes the final word',
+  chaos:'No shortage of plot twists in the '+seasonText+' race',
+  photo:'Fine margins, big consequences: '+first.name+' gets the nod',
+  dominance:first.name+' leaves the chasing pack with homework',
+  pursuit:'The long chase ends with '+first.name+' on top',
+  steady:first.name+' finds the winning formula'
+ }[angle];
  const paras=[];
- paras.push('The '+season.replace('-','–')+' Barolo League campaign '+(live?'is shaping up as':'served up')+' a '+(changes>=4?'topsy-turvy':lead<=3?'closely fought':'competitive')+' contest. '+first.name+' '+topWord+' with '+first.pts+' league points from '+first.w+' wins'+(second?', '+lead+' point'+(lead===1?'':'s')+' ahead of '+second.name:'')+'.');
- if(e[0]&&m[0]){
-  let t='After Gameweek '+early+', '+e[0].name+' held the early lead';
-  if(m[0].name!==e[0].name)t+=', but '+m[0].name+' had taken over by the halfway stage';
-  else t+=' and was still setting the pace halfway through';
-  t+='.';
-  if(changes>1)t+=' The lead changed hands '+changes+' times across the recorded gameweeks, so nobody could afford to get too comfortable.';
-  else if(changes===1)t+=' There was just one change at the top, but it proved decisive.';
-  paras.push(t);
+ const openers={
+  dynasty:'Familiar faces at the front, familiar frustrations behind. '+first.name+' backed up the previous season’s first-place finish with another campaign at the top of the recorded head-to-head standings.',
+  comeback:'For much of the run-in, the script belonged to somebody else. '+late[0].name+' led with three recorded gameweeks remaining, but '+first.name+' had other ideas.',
+  chaos:'Anyone who confidently predicted the outcome of this season deserves a second look at their crystal ball. The lead changed hands '+changes+' times, with momentum proving hard to hold.',
+  photo:'This was a season decided by the details rather than daylight. '+first.name+' and '+second.name+' ended separated by '+gap+' league point'+(gap===1?'':'s')+'.',
+  dominance:'The others had their moments, but '+first.name+' made a habit of turning them into footnotes. The final margin over '+second.name+' was '+gap+' league points.',
+  pursuit:'The early running belonged to '+earlyLeader+', yet the campaign did not stay on that course. '+first.name+' gradually made the argument that mattered most: the final table.',
+  steady:'Not every season needs a dramatic last-minute rescue. '+first.name+' put together the most effective head-to-head campaign, collecting '+first.pts+' league points from '+first.w+' victories.'
+ };
+ paras.push(openers[angle]);
+ const middle={
+  dynasty:'The challenge for the chasing pack was not just finding a good week; it was matching that consistency over the full schedule. '+(second?second.name+' came closest, finishing '+gap+' points back.':'The rest never quite found an answer.'),
+  comeback:'By the final standings, '+first.name+' had '+first.pts+' points'+(second?', with '+second.name+' on '+second.pts:'')+'. '+late[0].name+' will be forgiven for avoiding the words “nearly there” for a while.',
+  chaos:'At Gameweek '+q+', '+earlyLeader+' was in front; by Gameweek '+half+', '+halfLeader+' occupied top spot. The table was less a procession than a revolving door.',
+  photo:'The title-table contest stayed close enough that every narrow win mattered. '+(earlyLeader!==first.name?earlyLeader+' had set the pace earlier, but the order changed before the finish.':'There was no comfortable cushion for the leader.'),
+  dominance:'Even when the league supplied a few distractions, the overall picture stayed remarkably clear. '+(dominant?first.name+' occupied top spot after '+(leadingMost[first.name]||0)+' of the '+wks.length+' recorded gameweeks.':'The points gap tells its own story.'),
+  pursuit:'The halfway picture had '+halfLeader+' in pole position. By the finish, however, '+first.name+' had done enough to overhaul the early narrative and lead the standings.',
+  steady:'The early benchmark was '+earlyLeader+', while '+halfLeader+' led at halfway. '+(changes?'There were '+changes+' changes at the summit, but the last word belonged to '+first.name+'.':'The leader kept the challengers at arm’s length.')
+ };
+ paras.push(middle[angle]);
+ const extras=[];
+ if(win.n>=3)extras.push(win.team+' produced the standout winning streak: '+win.n+' on the bounce');
+ if(loss.n>=3)extras.push(loss.team+' endured '+loss.n+' successive defeats'+(loss.n>=5?' — a spell best filed under “character building”':''));
+ if(big&&big.margin>=25)extras.push(big.winner+' handed '+big.loser+' a '+big.margin.toFixed(2)+'-point defeat in Gameweek '+big.week);
+ if(extras.length){
+  const leadIns=['Elsewhere, the weekly results supplied their own headlines. ','Away from the main race, there was plenty for the group chat. ','The season had a supporting cast of heroes and hard-luck stories. ','Not all the drama happened at the summit. '];
+  const index=(Number(season.slice(0,4))-2018)%leadIns.length;
+  paras.push(leadIns[index]+extras.join('; ')+'.');
  }
- if(late[0]&&late[0].name!==first.name)paras.push('There was a late twist too: '+late[0].name+' was leading with three recorded gameweeks to go, only for '+first.name+' to take over by the end. A reminder that the finishing line is not at Gameweek '+wks[Math.max(0,wks.length-4)]+'.');
- else if(second&&lead<=3)paras.push('With only '+lead+' point'+(lead===1?'':'s')+' separating the top two, there was precious little room for a slip-up. '+second.name+' pushed hard but ultimately had to settle for second in the recorded standings.');
- else if(second)paras.push(second.name+' provided the closest challenge, but '+first.name+' kept enough daylight between themselves and the chasing pack.');
- if(win.n>=4)paras.push('The form guide had its own talking point: '+win.team+' put together '+win.n+' consecutive victories, the longest winning run of the season.'+(loss.n>=4?' At the other end, '+loss.team+' endured '+loss.n+' straight defeats — one run they probably will not be framing.':''));
- else if(loss.n>=4)paras.push(loss.team+' had a spell to forget, suffering '+loss.n+' consecutive defeats. Not quite the run of form the manager would have drawn up.');
- if(repeat)paras.push('And there was a familiar name at the top: '+first.name+' also led the recorded head-to-head standings in '+prevSeason.replace('-','–')+'. That makes it consecutive first-place finishes in the available league-table data — the sort of consistency that gives the rest of the league a headache.');
- const verdict=repeat?'Back-to-back top finishes: the chasing pack have some catching up to do.':late[0]&&late[0].name!==first.name?'A well-timed late surge made the difference.':lead<=3?'Fine margins decided the race, and the runners-up will be wondering what might have been.':'A strong campaign at the top, with plenty of talking points further down the table.';
+ if(repeat)paras.push('And that is consecutive seasons at the top for '+first.name+' ('+prevSeason.replace('-','–')+' and '+seasonText+'). Back-to-back first-place finishes are impressive enough; the rest of the league might want to check whether there is a secret training ground.');
+ else if(third&&gap<=6)paras.push(third.name+' also stayed in the conversation, finishing '+(first.pts-third.pts)+' points behind first. There was not much room for anyone to coast.');
+ else if(lastPlace&&lastPlace.name!==first.name&&lastPlace.l>lastPlace.w+5)paras.push('At the opposite end, '+lastPlace.name+' had a tougher campaign with '+lastPlace.l+' losses. The good news? There is always next season.');
+ const verdict={
+  dynasty:'Same name at the top, new season in the books. The challengers need a new plan.',
+  comeback:'A timely finish from '+first.name+'; an uncomfortable lesson in seeing out a lead for the opposition.',
+  chaos:'The one reliable prediction was that the table would keep everyone guessing.',
+  photo:'A handful of results made all the difference. Nobody will be forgetting the close ones.',
+  dominance:'No photo finish required. The final gap was a statement in itself.',
+  pursuit:'The early leaders made the headlines; '+first.name+' made the final table.',
+  steady:'Consistency won the argument, even if the group chat will insist otherwise.'
+ }[angle];
+ if(live)return {title:'The '+seasonText+' story is still being written',paragraphs:['The current campaign has reached Gameweek '+last+', with '+first.name+' leading on '+first.pts+' points'+(second?' ahead of '+second.name+' ('+second.pts+')':'')+'.','So far, the lead has changed hands '+changes+' times. '+(win.n>=3?win.team+' has put together '+win.n+' consecutive wins. ':'')+'There is still time for the table, and the jokes, to change.'],verdict:'The final chapter is not written yet.'};
  return {title,paragraphs:paras,verdict};
 }
 function historyPanel(){
