@@ -80,6 +80,7 @@ STORE=Path(os.getenv('BAROLO_DATA_DIR',str(ROOT/'storage')))
 STORE.mkdir(parents=True,exist_ok=True)
 PROFILES=STORE/'profiles.json'
 HISTORY=STORE/'history.json'
+HISTORY_SEED=ROOT/'historical_seed.json'
 def load_json(path,default):
     try:return json.loads(path.read_text(encoding='utf-8'))
     except (OSError,ValueError):return default
@@ -118,7 +119,10 @@ class Handler(BaseHTTPRequestHandler):
             body=(ROOT/'index.html').read_bytes()
             self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
         if path=='/api/profiles':return self.reply(200,load_json(PROFILES,{}))
-        if path=='/api/history':return self.reply(200,load_json(HISTORY,{}))
+        if path=='/api/history':
+            seed=load_json(HISTORY_SEED,{})
+            seed.update(load_json(HISTORY,{}))
+            return self.reply(200,seed)
         if path in ('/api/data','/api/status'):
             with lock:data=dict(state)
             if path=='/api/status':data={k:data.get(k) for k in ('source','updated_at','error')}

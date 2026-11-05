@@ -25,3 +25,7 @@ Deploy this folder to a Python web hosting service (e.g. Render) using start com
 - Browser CSV uploads are stored locally in the browser and do not update the server or other visitors.
 - The team ID map is specific to this league. New teams require updating the map in index.html.
 - This is not yet publicly hosted.
+
+
+## Historical data (2018–2026)
+Eight seasons are preloaded in `historical_seed.json` and served by `/api/history`. No manual upload is required. Administrator uploads override the corresponding seeded season; uploads require `ADMIN_TOKEN` and persistent disk storage on Render to survive redeployments. The 2017–2018 season is listed but has no supplied CSV. The 2026–2027 season uses the current Fantrax feed.
